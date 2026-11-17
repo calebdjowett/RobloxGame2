@@ -142,6 +142,11 @@ Implement a production-grade `DataService` in strict Luau using `DataStoreServic
 6. Studio / Unpublished Fallback: Probe `DataStoreService` on startup; if API access is disabled in Studio or the place is unpublished, warn once and run in an in-memory test session mode so playtesting still works out of the box.
 
 
+4. Server-Side Security (Anti-Exploit)
+Obbies are massive targets for exploiters using scripts to fly, teleport to the end, or auto-farm currency. If they flood your "Top Investors" leaderboard without actually paying, it ruins the monetization loop.
+
+The Fix: Never trust the client. If a player claims they just jumped from Level 1 to Level 50 in 0.2 seconds, your server script should recognize that travel time is mathematically impossible and reset them to their proper spawn point.
+
 
 
 
