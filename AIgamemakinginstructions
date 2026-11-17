@@ -1,11 +1,15 @@
-# Roblox Luau Game Architecture & Workflow Instructions
+# AI Agent Instructions: Hensen Juang - Journey Back (`RobloxGame2`)
 
-Build and maintain this Roblox game completely in code (`.luau` files) using the **Rojo + Rokit** external workflow so the entire game—maps, 3D models, UI, sound wiring, AI bots, and server/client logic—lives in Git and can be imported into Roblox Studio via three `.rbxm` files (`Shared.rbxm`, `Server.rbxm`, `Client.rbxm`) or a full `.rbxlx` place file.
+Build and maintain this Roblox game completely in strict Luau code (`.luau` files) using the **Rojo + Rokit** workflow. Every 3D map zone, modular prefab, obstacle, UI screen, sound controller, data store, and gameplay system must be generated programmatically in code so the entire game lives in Git and compiles into three drag-and-drop Roblox Studio packages (`Shared.rbxm`, `Server.rbxm`, `Client.rbxm`) and a full place file (`CatchAndCook` style).
+
+Read `README.md` for the full creative vision, zones, humor, obstacles, and monetization design. Follow the technical architecture and verification rules below at all times.
 
 ---
 
-## 1. CLI Toolchain (`rokit.toml`)
-Use **Rokit** (`~/.rokit/bin`) to manage and run all CLI tools from the terminal:
+## 1. CLI Toolchain & Configuration Files
+Use **Rokit** (`~/.rokit/bin`) to run all verification and build tools. If any of these root configuration files do not exist yet, create them first:
+
+### `rokit.toml`
 ```toml
 [tools]
 rojo = "rojo-rbx/rojo@7.7.1"
@@ -15,62 +19,155 @@ luau-lsp = "JohnnyMorganz/luau-lsp@1.70.1"
 luau = "luau-lang/luau@0.746"
 lune = "lune-org/lune@0.11.1"
 ```
-- **`.luaurc`:** `{ "languageMode": "strict" }` — every `.luau` file must begin with `--!strict`.
-- **`selene.toml`:** `std = "roblox"` (`0 errors, 0 warnings` required).
-- **`stylua.toml`:** `column_width = 120`, `indent_type = "Tabs"`, `indent_width = 4`, `quote_style = "AutoPreferDouble"`.
+
+### `.luaurc`
+```json
+{
+	"languageMode": "strict"
+}
+```
+*(Every `.luau` file in `src/` must start with `--!strict`.)*
+
+### `selene.toml`
+```toml
+std = "roblox"
+
+[lints]
+shadowing = "allow"
+```
+
+### `stylua.toml`
+```toml
+column_width = 120
+line_endings = "Unix"
+indent_type = "Tabs"
+indent_width = 4
+quote_style = "AutoPreferDouble"
+call_parentheses = "Always"
+```
+
+### `default.project.json`
+Map the repository into three top-level containers (`ReplicatedStorage.Shared`, `ServerScriptService.Server`, and `StarterPlayer.StarterPlayerScripts.Client`):
+```json
+{
+  "name": "HensenJuangJourneyBack",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": { "$path": "src/shared" }
+    },
+    "ServerScriptService": {
+      "Server": { "$path": "src/server" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": { "$path": "src/client" }
+      }
+    }
+  }
+}
+```
 
 ---
 
-## 2. Repository & Rojo Mapping (`default.project.json`)
-Map the project into three top-level containers so updates can be dragged-and-dropped into Roblox Studio in seconds:
-- **`src/shared` → `ReplicatedStorage.Shared`** (`ModuleScript`s only):
-  - `src/shared/Core/` — **Pure game rules & math** (no Roblox `Instance` / `Workspace` / `Players` APIs). Because these modules are pure Luau, they run directly in the standalone `luau` CLI for instant unit testing.
-  - `src/shared/Art/` — **Procedural 3D map, hub, prop, and character builders** (`HubArt.luau`, `MapRegistry.luau`, etc.). Every map and prop is constructed programmatically from `Part`, `WedgePart`, `CornerWedgePart`, `Cylinder`, `Ball`, `PointLight`, `SurfaceLight`, and `SurfaceGui` instances.
-  - `src/shared/Net.luau` — Centralized `RemoteEvent` / `RemoteFunction` helper under `ReplicatedStorage`.
-  - `src/shared/Assets.luau` & `src/shared/Audio.luau` — Single dictionary of all `rbxassetid://` sound and music IDs with safe fallback when an ID is empty.
-  - `src/shared/Monetization.luau` — Single source of truth for GamePass IDs, Developer Product IDs, and Group ID.
-- **`src/server` → `ServerScriptService.Server`**:
-  - `src/server/Main.server.luau` — Single server entrypoint that initializes services in deterministic order.
-  - `src/server/Services/` — Modular server services (`DataService.luau`, `RoundService.luau`, `ShopService.luau`, `HubService.luau`, `BotService.luau`, etc.).
-  - `src/server/Bots/` — Server-driven AI bot brains and navigation so rounds are always playable solo or with partial lobbies, with seamless human takeover when a real player joins.
-- **`src/client` → `StarterPlayer.StarterPlayerScripts.Client`**:
-  - Modular `.client.luau` controllers (`RoundHud.client.luau`, `ShopUi.client.luau`, `HubController.client.luau`, `MusicController.client.luau`, `DevPanel.client.luau`, etc.). All UI (`ScreenGui`, `BillboardGui`, `ProximityPrompt`) is created in Luau code using `UIScale` / responsive sizing.
-- **`tests/`**:
-  - Fast unit tests (`tests/run.luau` + `tests/*.spec.luau`) executed via `luau tests/run.luau` testing all `src/shared/Core/` modules.
+## 2. Directory & Module Architecture (The "Catch & Cook" Pattern)
+
+Keep **pure game rules** separate from **Roblox Instance/service code** so all math, progression, shop rules, and anti-cheat logic can be unit-tested in milliseconds using the standalone `luau` CLI.
+
+### `src/shared` → `ReplicatedStorage.Shared`
+1. **`src/shared/Core/` (Pure Luau — NO Roblox `Instance`, `Workspace`, or `Players` APIs):**
+   - `StageRules.luau`:
+     - Defines the **60 stages** (within the 50–75 target) across the **4 Vertical Zones**:
+       1. **Stages 1–10 (Zone 1 — Suburban Kitchen / Diner Spawn, 5–10s pacing):** Tiled kitchen floor, giant central oven, giant spatulas, oven mitts, broken kitchen ovens, easy warm-up jumps into the base of the tower.
+       2. **Stages 11–30 (Zone 2 — Consumer Graphics Zone, 15–20s pacing):** `JTX 1060` → `PTX 3060` → `PTX 4090` levels weaving in and out of a giant open PC case, spinning cooling fans, moving circuit-board platforms, electric arcs between RAM sticks.
+       3. **Stages 31–50 (Zone 3 — Enterprise AI Zone, 15–25s pacing):** `J100` → `J200` → `B100` black-and-gold server room high in the sky, rotating server racks, fiber-optic laser beams, 3-second overheating heatsink platforms, "Moore's Law - RIP" graveyard side-area.
+       4. **Stages 51–60 (Zone 4 — The Squeeze & Stock Market Moon Peak, 20–30s+ pacing):** Hardest gauntlets leading to the floating Stock Market Moon platform, `Black Well` (`GB200 Superchip`) monument, green zigzag stock lines, "Buy the Dip" signs, Alisa Juang & Dori Juang statues, VIP "Nvidiya" Boardroom Lounge, and Factory Reset (Rebirth) pedestal.
+     - Pure functions for: stage reward calculation ("Dividends" / "Shares"), Factory Reset (Rebirth) requirements & permanent multipliers (`+20%` walk speed / dividend multiplier / `V2`, `V3` tags), 4-death "Skip Stage" prompt trigger check (`deathsOnStage >= 4`), and **anti-exploit minimum travel time** between Stage `N` and Stage `N + 1`.
+   - `ShopCatalog.luau` & `ShopRules.luau`:
+     - Pure catalog and validation functions (`owns`, `canBuy`, `canEquip`, `equipped`) for:
+       - **Leather Jackets:** Basic Jacket, Black Jacket, Fake Leather, Real Leather, Gold Jacket, Diamond Leather, Matrix Leather, Quantum Leather.
+       - **Hand Accessories:** Oven Mitts, Holdable Honey Pots.
+       - **Pets & Followers:** Floating Mini-GPU, Tiny Alisa Juang, Floating Green "Stock Goes Up" Arrow.
+       - **Auras & Trails:** "AI Hype" Aura (green glow + floating numbers), "Stock Split" Aura (temporarily shrinks avatar), "Green Market" Trail, Floating Microchip Trail.
+       - **Power-Ups (Permanent GamePasses & Temporary DevProducts):** "Overclocking" (Speed Coil), "Cooling Fan" (Gravity Coil), "Liquid Cooling" (Invincibility Shield against overheating platforms), and "The Golden Spatula" (500 R$ push tool).
+2. **`src/shared/Art/` (Procedural 3D Builders):**
+   - `Prefabs.luau`: Build **one high-detail, reusable version** of each core asset that can be scaled, rotated, and recolored across the entire tower:
+     - Detailed Circuit Board Platform (PCB traces, gold pins, capacitors, microchips)
+     - Blocky GPU Unit (`JTX 1060` / `PTX 3060` / `PTX 4090` / `J100` / `B100` with customizable neon accents and fan cutouts)
+     - Realistic Spinning Cooling Fan assembly
+     - Imposing Black & Gold Server Rack module with blinking LED strips
+     - Overheating Heatsink Platform (finned aluminum/copper block that glows red)
+     - Giant Kitchen Spatula, Oven Mitt, and Disassembled/Broken Kitchen Oven
+     - Parody Landmarks: Hensen Juang Statue, Alisa Juang Statue, Dori Juang Statue, Honey Pots, Cash Piles, Leather Jacket Display Rack, "Moore's Law - RIP" Tombstone, and Motivational Neon Signs (*"The More You Buy, The More You Save!"*, *"I Hope You Suffer!"*, *"BUY THE DIP"*).
+   - `TowerArt.luau`: Assembles the Ground-Floor Suburban Kitchen, the colossal central stacked Server-Rack & Motherboard Pillar, the 60 spiraling obstacle stages around the perimeter so players at the bottom can look up at the chaos above, and the Stock Market Moon summit. Exports exact stage checkpoint positions (`STAGE_CF: { [number]: CFrame }`) so `StageService` can spawn and validate players accurately.
+   - `CosmeticArt.luau`: Builds 3D wearable Leather Jackets, Oven Mitts, held Honey Pots, floating Pets, and Auras/Trails attached to player characters.
+3. **`src/shared/Net.luau`, `src/shared/Assets.luau`, `src/shared/Audio.luau`, `src/shared/Monetization.luau`, `src/shared/ScreenFit.luau`:**
+   - Centralized networking, sound/music ID registry (with safe no-op when an ID is empty), GamePass/DevProduct ID table, and responsive UI scaling for mobile/tablet/PC.
+
+### `src/server` → `ServerScriptService.Server`
+- `src/server/Main.server.luau`: Builds the world (`TowerArt.build()`) and initializes all services in deterministic order.
+- `src/server/Services/DataService.luau`: Production `DataStoreService` persistence (see Section 4).
+- `src/server/Services/StageService.luau`:
+  - Tracks each player's current stage, rebirth count (`FactoryResets`), and consecutive deaths on the current stage.
+  - **Server-Side Anti-Exploit:** Never trust the client for stage progression or currency grants. Validate checkpoint touches on the server by checking:
+    1. Distance from player's `HumanoidRootPart` to the target stage pad.
+    2. Sequential progression (`targetStage == currentStage + 1`).
+    3. Elapsed time since the previous stage is at least `StageRules.minStageTime(currentStage)`. If a player teleports or reaches a pad faster than mathematically possible, reject the checkpoint and teleport them back to their current stage spawn.
+  - Increments `deathsOnStage` on humanoid death/fall; when `deathsOnStage >= 4`, fires a remote event to open the non-intrusive *"Stuck? Upgrade your drivers to skip this level!"* prompt.
+  - Handles **Factory Reset (Rebirth)** at the summit: resets stage to 1, increments rebirths, applies permanent walk speed / dividend multiplier and chat/overhead badge (`V2`, `V3`, etc.).
+- `src/server/Services/ObstacleService.luau`:
+  - Runs server-side hazard & platform logic:
+    - **Overheating Heatsink Platforms:** When stepped on, gradually heat up over 3.0 seconds (updating a part color/attribute) and eliminate the player if they are still standing on it after 3 seconds (unless they have an active **Liquid Cooling** shield).
+    - **Laser Beams, Electric Arcs, Moving/Falling GPUs, Spinning Spatulas, Conveyor Belts.**
+    - **Golden Spatula Tool:** Validates cooldown and applies a mild knockback impulse to nearby players.
+    - **VIP Boardroom Lounge & Cash Piles:** Checks `player.MembershipType == Enum.MembershipType.Premium` (or VIP pass) for the Boardroom entry and awards timed Dividend pickups.
+- `src/server/Services/ShopService.luau`:
+  - Handles buying and equipping Leather Jackets, Oven Mitts, Honey Pots, Pets, and Auras with Dividends/Shares or Robux.
+  - Handles `MarketplaceService.ProcessReceipt` for:
+    - **Quantum Leap (Skip Stage)** DevProduct
+    - Temporary Power-Ups (Overclocking, Cooling Fan, Liquid Cooling)
+    - Robux Jackets (Quantum Leather, Diamond Leather, Matrix Leather)
+    - **Top Investors Donation Board** (`Invest 50 R$`, `Invest 1000 R$`, updating the lobby leaderboard wall with top donors' names and avatar headshots).
+
+### `src/client` → `StarterPlayer.StarterPlayerScripts.Client`
+- `HudController.client.luau`:
+  - Clean, responsive HUD with a Stage progress bar, current Zone/GPU title (e.g., `Stage 14 • JTX 1060`), Dividends counter, Rebirth button (when at the peak), and persistent side buttons (**Shop**, **Skip Stage**, **Music Mute / Skip Song**).
+  - **Mobile Safe Zones:** Never overlap the bottom-left mobile thumbstick or bottom-right jump button. Keep side buttons in the middle-right or top bar using `ScreenFit`.
+  - Shows the non-intrusive *"Stuck? Upgrade your drivers to skip this level!"* popup after 4 deaths on the same stage.
+- `ShopUi.client.luau`: Touch- and mouse-friendly Shop modal + interactive 3D Jacket Rack `ProximityPrompt`s.
+- `ObstacleClient.client.luau`: Smooth `RunService.RenderStepped` / `Heartbeat` animation for spinning cooling fans, rotating server racks, and floating collectibles.
+- `MusicController.client.luau`: Loops background music with both a **Mute (🎵)** button and a **Skip Song (⏭️)** button.
+- `DevPanel.client.luau`: Toggleable `🛠️ DEV` panel for studio/dev testing (Warp to Stage/Zone, `+1,000 Dividends`, Trigger 4-Death Prompt, Instant Factory Reset, Toggle Overclocking/Liquid Cooling).
 
 ---
 
-## 3. Procedural 3D Map Generation & Anti-Flicker (Z-Fighting) Rules
-1. **High-Detail Greebling Aesthetic:**
-   - Do not leave large, flat surfaces. Break walls, ceilings, and floors into smaller overlapping parts with varying depths, thicknesses, and `Color3` shades to create structural depth.
-   - Layer different `Enum.Material` types together (e.g., `Concrete` or `Cobblestone` bases with `CorrodedMetal` / `Metal` trims, `WoodPlanks` framing, and `Neon` accents).
-   - Programmatically attach `PointLight` or `SurfaceLight` instances with custom tints to accent parts for localized lighting, and scatter small decorative details (beams, trim, lanterns, crates, foliage) across the geometry.
+## 3. Procedural 3D Art, Modular Prefabs & Zero Z-Fighting Rules
+1. **Humor + Modular Prefabs:**
+   - Focus on recognizable, funny tech/kitchen parody objects (giant spatulas, disassembled ovens, JTX/PTX GPUs, spinning fans, server racks, leather jackets, honey pots, Alisa/Dori/Hensen statues, neon quote signs) rather than spending thousands of lines on one obscure prop.
+   - Build each core obstacle/platform once in `Prefabs.luau` with rich greebling (layered `Enum.Material`s like `Concrete`, `Metal`, `CorrodedMetal`, `Neon`, `Glass`, varied `Color3` shades, and `PointLight` / `SurfaceLight` accents), then clone/invoke, scale, rotate, and recolor those prefabs across all 60 stages.
 2. **Zero Z-Fighting (Flicker Check):**
-   - Never place two opaque parts of different colors/materials with coplanar faces occupying the same plane. Offset trim, borders, and inset panels by at least `0.02`–`0.05` studs so surfaces never flicker.
-   - Verify all procedural geometry with a `@lune/roblox` static geometry checker (`lune run tools/preview/export.luau zfight`) to ensure `0 problem faces`.
+   - Never place two opaque parts of different colors or materials with coplanar faces occupying the exact same plane. Offset trims, PCB traces, screen faces, and borders by at least `0.02`–`0.05` studs.
 
 ---
 
 ## 4. Production Data Persistence (`DataService.luau`)
-Always protect player progress (`DataStoreService`) with these 6 rules:
-1. **`pcall` + Retries:** Wrap all `DataStoreService` calls (`GetDataStore`, `GetAsync`, `UpdateAsync`) in `pcall` with a 3-attempt retry helper and backoff delay.
-2. **Atomic `UpdateAsync` + Session Locking:** Never use `SetAsync` for player profiles. Use `UpdateAsync` with a session lock (`{ job = game.JobId, time = os.time() }`, expiring after ~90s if a server crashes) to prevent item duplication or server-hop race conditions.
-3. **Anti-Wipe Guard on Failed Loads:** If loading a player's profile fails or stays locked after all retries, **never** initialize a blank default profile that could overwrite their real save—kick the player with a friendly rejoin message and block saving for that session.
-4. **Schema Reconciliation (`reconcile`):** Merge loaded data into the latest default table structure so adding new fields in future updates never erases old saves.
-5. **Full Save Lifecycle:** Autosave every 60 seconds, save immediately on `ProcessReceipt` purchases before returning `PurchaseGranted`, save and release the session lock in `Players.PlayerRemoving`, and save all active sessions in `game:BindToClose`.
-6. **Studio / Unpublished Fallback:** Probe `DataStoreService` on startup; if API Services are disabled in Studio or the place is unpublished, warn once and fall back to an in-memory session table so testing still works seamlessly.
+Enforce all 6 anti-data-loss rules in `src/server/Services/DataService.luau`:
+1. **Protected Calls & Retries:** Wrap every `DataStoreService` call (`GetDataStore`, `GetAsync`, `UpdateAsync`) in `pcall` with a retry helper (3 attempts with backoff) so temporary Roblox API hiccups never crash a thread or drop a save.
+2. **Atomic `UpdateAsync` & Session Locking:** Never use `SetAsync` for player profiles. Use `UpdateAsync` with a session lock (`{ job = game.JobId, time = os.time() }` with a ~90s timeout for crashed servers) so server-hopping cannot duplicate items or overwrite newer saves.
+3. **Anti-Wipe Guard on Failed Loads:** Never fall back to a blank default profile if a live DataStore load fails or remains locked after retries—kick the player with a friendly rejoin message and block saving for that session so a failed load can never overwrite a player's real save.
+4. **Schema Versioning & Reconciliation:** Include a `reconcile(raw)` function that merges saved tables into the latest default schema (`stage`, `rebirths`, `dividends`, `owned`, `equipped`, `donatedRobux`, `receipts`) so adding new fields in future updates never wipes existing player data.
+5. **Complete Save Lifecycle:** Save automatically every 60 seconds, immediately on critical purchases (`ProcessReceipt` only returning `Enum.ProductPurchaseDecision.PurchaseGranted` after a confirmed save), on `Players.PlayerRemoving` (releasing the session lock), and inside `game:BindToClose` (yielding until all in-flight saves finish).
+6. **Studio / Unpublished Fallback:** Probe `DataStoreService` on startup; if API access is disabled in Studio or the place is unpublished, warn once and run in an in-memory test session mode so playtesting works out of the box.
 
 ---
 
-## 5. Mandatory Verification & `.rbxm` Delivery Pipeline
+## 5. Verification & `.rbxm` Delivery Pipeline
 Before finishing any task or pushing to GitHub, run the full check and build pipeline:
 1. **Format:** `stylua src tests`
-2. **Lint:** `selene src tests` (must pass with `0 errors, 0 warnings`)
-3. **Unit Tests:** `luau tests/run.luau` (all tests must pass)
-4. **Flicker Check:** `lune run tools/preview/export.luau zfight` (`0 problem faces`)
-5. **Typecheck:** `rojo sourcemap default.project.json -o .cache/sourcemap.json` followed by `luau-lsp analyze` (`0` errors)
-6. **Build Studio Packages (`.rbxm`) & Push to GitHub:**
-   Build standalone `.rbxm` models for the 3 folders and commit them to the repo root so they can be downloaded with one click:
+2. **Lint:** `selene src tests` (`0 errors, 0 warnings`)
+3. **Unit Tests:** `luau tests/run.luau` (all tests in `tests/*.spec.luau` must pass)
+4. **Typecheck:** `rojo sourcemap default.project.json -o .cache/sourcemap.json` followed by `luau-lsp analyze` (`0` errors)
+5. **Build Studio Packages (`.rbxm`) & Commit to Root:**
    ```powershell
    '{"name":"Shared","tree":{"$path":"src/shared"}}' | Set-Content shared.project.json
    '{"name":"Server","tree":{"$path":"src/server"}}' | Set-Content server.project.json
@@ -80,7 +177,7 @@ Before finishing any task or pushing to GitHub, run the full check and build pip
    rojo build client.project.json -o Client.rbxm
    Remove-Item shared.project.json, server.project.json, client.project.json
    ```
-7. **Always provide direct GitHub raw download links** in your final response so the user can download and replace `ReplicatedStorage > Shared`, `ServerScriptService > Server`, and `StarterPlayer > StarterPlayerScripts > Client` in Roblox Studio in one click:
-   - `https://github.com/<owner>/<repo>/raw/main/Shared.rbxm`
-   - `https://github.com/<owner>/<repo>/raw/main/Server.rbxm`
-   - `https://github.com/<owner>/<repo>/raw/main/Client.rbxm`
+6. **Provide One-Click `.rbxm` Raw Download Links in Every Final Reply:**
+   - **[Download Shared.rbxm](https://github.com/calebdjowett/RobloxGame2/raw/main/Shared.rbxm)** → Replace **`ReplicatedStorage > Shared`**
+   - **[Download Server.rbxm](https://github.com/calebdjowett/RobloxGame2/raw/main/Server.rbxm)** → Replace **`ServerScriptService > Server`**
+   - **[Download Client.rbxm](https://github.com/calebdjowett/RobloxGame2/raw/main/Client.rbxm)** → Replace **`StarterPlayer > StarterPlayerScripts > Client`**
