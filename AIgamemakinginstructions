@@ -1,0 +1,86 @@
+# Roblox Luau Game Architecture & Workflow Instructions
+
+Build and maintain this Roblox game completely in code (`.luau` files) using the **Rojo + Rokit** external workflow so the entire game—maps, 3D models, UI, sound wiring, AI bots, and server/client logic—lives in Git and can be imported into Roblox Studio via three `.rbxm` files (`Shared.rbxm`, `Server.rbxm`, `Client.rbxm`) or a full `.rbxlx` place file.
+
+---
+
+## 1. CLI Toolchain (`rokit.toml`)
+Use **Rokit** (`~/.rokit/bin`) to manage and run all CLI tools from the terminal:
+```toml
+[tools]
+rojo = "rojo-rbx/rojo@7.7.1"
+selene = "Kampfkarren/selene@0.32.0"
+stylua = "JohnnyMorganz/StyLua@2.6.0"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.70.1"
+luau = "luau-lang/luau@0.746"
+lune = "lune-org/lune@0.11.1"
+```
+- **`.luaurc`:** `{ "languageMode": "strict" }` — every `.luau` file must begin with `--!strict`.
+- **`selene.toml`:** `std = "roblox"` (`0 errors, 0 warnings` required).
+- **`stylua.toml`:** `column_width = 120`, `indent_type = "Tabs"`, `indent_width = 4`, `quote_style = "AutoPreferDouble"`.
+
+---
+
+## 2. Repository & Rojo Mapping (`default.project.json`)
+Map the project into three top-level containers so updates can be dragged-and-dropped into Roblox Studio in seconds:
+- **`src/shared` → `ReplicatedStorage.Shared`** (`ModuleScript`s only):
+  - `src/shared/Core/` — **Pure game rules & math** (no Roblox `Instance` / `Workspace` / `Players` APIs). Because these modules are pure Luau, they run directly in the standalone `luau` CLI for instant unit testing.
+  - `src/shared/Art/` — **Procedural 3D map, hub, prop, and character builders** (`HubArt.luau`, `MapRegistry.luau`, etc.). Every map and prop is constructed programmatically from `Part`, `WedgePart`, `CornerWedgePart`, `Cylinder`, `Ball`, `PointLight`, `SurfaceLight`, and `SurfaceGui` instances.
+  - `src/shared/Net.luau` — Centralized `RemoteEvent` / `RemoteFunction` helper under `ReplicatedStorage`.
+  - `src/shared/Assets.luau` & `src/shared/Audio.luau` — Single dictionary of all `rbxassetid://` sound and music IDs with safe fallback when an ID is empty.
+  - `src/shared/Monetization.luau` — Single source of truth for GamePass IDs, Developer Product IDs, and Group ID.
+- **`src/server` → `ServerScriptService.Server`**:
+  - `src/server/Main.server.luau` — Single server entrypoint that initializes services in deterministic order.
+  - `src/server/Services/` — Modular server services (`DataService.luau`, `RoundService.luau`, `ShopService.luau`, `HubService.luau`, `BotService.luau`, etc.).
+  - `src/server/Bots/` — Server-driven AI bot brains and navigation so rounds are always playable solo or with partial lobbies, with seamless human takeover when a real player joins.
+- **`src/client` → `StarterPlayer.StarterPlayerScripts.Client`**:
+  - Modular `.client.luau` controllers (`RoundHud.client.luau`, `ShopUi.client.luau`, `HubController.client.luau`, `MusicController.client.luau`, `DevPanel.client.luau`, etc.). All UI (`ScreenGui`, `BillboardGui`, `ProximityPrompt`) is created in Luau code using `UIScale` / responsive sizing.
+- **`tests/`**:
+  - Fast unit tests (`tests/run.luau` + `tests/*.spec.luau`) executed via `luau tests/run.luau` testing all `src/shared/Core/` modules.
+
+---
+
+## 3. Procedural 3D Map Generation & Anti-Flicker (Z-Fighting) Rules
+1. **High-Detail Greebling Aesthetic:**
+   - Do not leave large, flat surfaces. Break walls, ceilings, and floors into smaller overlapping parts with varying depths, thicknesses, and `Color3` shades to create structural depth.
+   - Layer different `Enum.Material` types together (e.g., `Concrete` or `Cobblestone` bases with `CorrodedMetal` / `Metal` trims, `WoodPlanks` framing, and `Neon` accents).
+   - Programmatically attach `PointLight` or `SurfaceLight` instances with custom tints to accent parts for localized lighting, and scatter small decorative details (beams, trim, lanterns, crates, foliage) across the geometry.
+2. **Zero Z-Fighting (Flicker Check):**
+   - Never place two opaque parts of different colors/materials with coplanar faces occupying the same plane. Offset trim, borders, and inset panels by at least `0.02`–`0.05` studs so surfaces never flicker.
+   - Verify all procedural geometry with a `@lune/roblox` static geometry checker (`lune run tools/preview/export.luau zfight`) to ensure `0 problem faces`.
+
+---
+
+## 4. Production Data Persistence (`DataService.luau`)
+Always protect player progress (`DataStoreService`) with these 6 rules:
+1. **`pcall` + Retries:** Wrap all `DataStoreService` calls (`GetDataStore`, `GetAsync`, `UpdateAsync`) in `pcall` with a 3-attempt retry helper and backoff delay.
+2. **Atomic `UpdateAsync` + Session Locking:** Never use `SetAsync` for player profiles. Use `UpdateAsync` with a session lock (`{ job = game.JobId, time = os.time() }`, expiring after ~90s if a server crashes) to prevent item duplication or server-hop race conditions.
+3. **Anti-Wipe Guard on Failed Loads:** If loading a player's profile fails or stays locked after all retries, **never** initialize a blank default profile that could overwrite their real save—kick the player with a friendly rejoin message and block saving for that session.
+4. **Schema Reconciliation (`reconcile`):** Merge loaded data into the latest default table structure so adding new fields in future updates never erases old saves.
+5. **Full Save Lifecycle:** Autosave every 60 seconds, save immediately on `ProcessReceipt` purchases before returning `PurchaseGranted`, save and release the session lock in `Players.PlayerRemoving`, and save all active sessions in `game:BindToClose`.
+6. **Studio / Unpublished Fallback:** Probe `DataStoreService` on startup; if API Services are disabled in Studio or the place is unpublished, warn once and fall back to an in-memory session table so testing still works seamlessly.
+
+---
+
+## 5. Mandatory Verification & `.rbxm` Delivery Pipeline
+Before finishing any task or pushing to GitHub, run the full check and build pipeline:
+1. **Format:** `stylua src tests`
+2. **Lint:** `selene src tests` (must pass with `0 errors, 0 warnings`)
+3. **Unit Tests:** `luau tests/run.luau` (all tests must pass)
+4. **Flicker Check:** `lune run tools/preview/export.luau zfight` (`0 problem faces`)
+5. **Typecheck:** `rojo sourcemap default.project.json -o .cache/sourcemap.json` followed by `luau-lsp analyze` (`0` errors)
+6. **Build Studio Packages (`.rbxm`) & Push to GitHub:**
+   Build standalone `.rbxm` models for the 3 folders and commit them to the repo root so they can be downloaded with one click:
+   ```powershell
+   '{"name":"Shared","tree":{"$path":"src/shared"}}' | Set-Content shared.project.json
+   '{"name":"Server","tree":{"$path":"src/server"}}' | Set-Content server.project.json
+   '{"name":"Client","tree":{"$path":"src/client"}}' | Set-Content client.project.json
+   rojo build shared.project.json -o Shared.rbxm
+   rojo build server.project.json -o Server.rbxm
+   rojo build client.project.json -o Client.rbxm
+   Remove-Item shared.project.json, server.project.json, client.project.json
+   ```
+7. **Always provide direct GitHub raw download links** in your final response so the user can download and replace `ReplicatedStorage > Shared`, `ServerScriptService > Server`, and `StarterPlayer > StarterPlayerScripts > Client` in Roblox Studio in one click:
+   - `https://github.com/<owner>/<repo>/raw/main/Shared.rbxm`
+   - `https://github.com/<owner>/<repo>/raw/main/Server.rbxm`
+   - `https://github.com/<owner>/<repo>/raw/main/Client.rbxm`
